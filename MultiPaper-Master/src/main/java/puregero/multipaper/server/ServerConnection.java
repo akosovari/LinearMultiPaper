@@ -7,6 +7,7 @@ import puregero.multipaper.mastermessagingprotocol.messages.serverbound.ServerBo
 import puregero.multipaper.mastermessagingprotocol.messages.serverbound.SetSecretMessage;
 import puregero.multipaper.mastermessagingprotocol.messages.serverbound.ShutdownMessage;
 import puregero.multipaper.server.handlers.*;
+import puregero.multipaper.server.util.RegionFileCache;
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
@@ -49,6 +50,8 @@ public class ServerConnection extends MasterBoundMessageHandler {
                 throw new RuntimeException(e);
             }
         }
+
+        RegionFileCache.i().shutdown();
     }
 
     public ServerConnection(SocketChannel channel) {

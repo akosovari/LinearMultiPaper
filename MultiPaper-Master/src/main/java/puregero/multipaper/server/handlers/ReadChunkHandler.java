@@ -5,6 +5,7 @@ import puregero.multipaper.mastermessagingprotocol.messages.serverbound.ChunkLoa
 import puregero.multipaper.mastermessagingprotocol.messages.serverbound.DataMessageReply;
 import puregero.multipaper.server.*;
 import puregero.multipaper.server.util.RegionFileCache;
+import java.util.concurrent.CompletableFuture;
 
 import java.io.File;
 
@@ -15,7 +16,8 @@ public class ReadChunkHandler {
         }
 
         Runnable callback = () -> {
-            RegionFileCache.getChunkDeflatedDataAsync(getWorldDir(message.world, message.path), message.cx, message.cz).thenAccept(b -> {
+            CompletableFuture.runAsync(() -> {
+                byte[] b = RegionFileCache.i().getChunkDeflatedData(getWorldDir(message.world, message.path), message.cx, message.cz);
                 if (b == null) {
                     b = new byte[0];
                 }

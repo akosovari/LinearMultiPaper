@@ -30,21 +30,66 @@ import java.lang.ref.*;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 
-public class RegionFileCache {
+public class RegionFileCache extends Thread {
 
     private static final int MAX_CACHE_SIZE = Integer.getInteger("max.regionfile.cache.size", 256);
+    private static RegionFileCache single_instance = null;
 
-    private static final LinkedHashMap<File, Reference<RegionFile>> cache = new LinkedHashMap<>(16, 0.75f, true);
+    private final LinkedHashMap<File, Reference<LinearRegionFile>> cache = new LinkedHashMap<>(16, 0.75f, true);
+    private Thread thread;
 
     private RegionFileCache() {
+        if (thread == null) {
+            thread = new Thread(this);
+            thread.start();
+        }
     }
 
-    public static synchronized boolean isRegionFileOpen(File regionDir, int chunkX, int chunkZ) {
-        File file = new File(regionDir, "r." + (chunkX >> 5) + "." + (chunkZ >> 5) + ".mca");
+    synchronized public static RegionFileCache i() {
+        if (single_instance == null)
+            single_instance = new RegionFileCache();
+        return single_instance;
+    }
+
+    public synchronized List<LinearRegionFile> getRegionFiles() {
+        ArrayList<LinearRegionFile> array = new ArrayList();
+        for (Map.Entry<File, Reference<LinearRegionFile>> entry: cache.entrySet()) {
+            LinearRegionFile region = entry.getValue().get();
+            array.add(region);
+        }
+        return array;
+    }
+
+    public void run() {
+        System.out.println("Starting storage thread");
+        while (true) {
+            ArrayList<LinearRegionFile> array;
+            synchronized(this) {
+                array = new ArrayList(cache.size());
+                for (Map.Entry<File, Reference<LinearRegionFile>> entry: cache.entrySet()) {
+                    LinearRegionFile region = entry.getValue().get();
+                    array.add(region);
+                }
+            }
+            for (LinearRegionFile region: array) {
+                synchronized(this) {
+                    region.flushOnSchedule();
+                }
+                try{Thread.sleep(10 * 1000 / array.size());} catch(InterruptedException ex) {}
+            }
+            try {
+                Thread.sleep(10 * 1000);
+                System.out.println("Cache size " + cache.size());
+            } catch(InterruptedException ex) {}
+        }
+    }
+
+    public synchronized boolean isRegionFileOpen(File regionDir, int chunkX, int chunkZ) {
+        File file = new File(regionDir, "r." + (chunkX >> 5) + "." + (chunkZ >> 5) + ".linear");
 
         file = canonical(file);
 
-        Reference<RegionFile> ref = cache.get(file);
+        Reference<LinearRegionFile> ref = cache.get(file);
 
         if (ref != null && ref.get() != null) {
             return true;
@@ -53,44 +98,30 @@ public class RegionFileCache {
         return false;
     }
 
-    private static File canonical(File file) {
-        try {
-            // Remove any .'s and ..'s
-            return new File(file.getCanonicalPath());
-        } catch (IOException e) {
-            e.printStackTrace();
-            return file;
-        }
+    private File canonical(File file) {
+        // Not using getCanonicalPath to stop it from following symlinks
+        // With symlinks not followed we can store old chunks on HDD and automatically move them to SSD on access
+        return new File(file.getAbsolutePath());
     }
     
-    private static File getFileForRegionFile(File regionDir, int chunkX, int chunkZ) {
-        return new File(regionDir, "r." + (chunkX >> 5) + "." + (chunkZ >> 5) + ".mca");
+    private File getFileForRegionFile(File regionDir, int chunkX, int chunkZ) {
+        return new File(regionDir, "r." + (chunkX >> 5) + "." + (chunkZ >> 5) + ".linear");
     }
 
-    public static synchronized RegionFile getRegionFileIfExists(File regionDir, int chunkX, int chunkZ) {
-        File file = getFileForRegionFile(regionDir, chunkX, chunkZ);
-
-        file = canonical(file);
-
-        Reference<RegionFile> ref = cache.get(file);
-
-        if (ref != null && ref.get() != null) {
-            return ref.get();
-        }
-
-        if (file.isFile()) {
+    public synchronized LinearRegionFile getRegionFileIfExists(File regionDir, int chunkX, int chunkZ) {
+        if (getFileForRegionFile(regionDir, chunkX, chunkZ).isFile()) {
             return getRegionFile(regionDir, chunkX, chunkZ);
         } else {
             return null;
         }
     }
 
-    public static synchronized RegionFile getRegionFile(File regionDir, int chunkX, int chunkZ) {
+    public synchronized LinearRegionFile getRegionFile(File regionDir, int chunkX, int chunkZ) {
         File file = getFileForRegionFile(regionDir, chunkX, chunkZ);
 
         file = canonical(file);
 
-        Reference<RegionFile> ref = cache.get(file);
+        Reference<LinearRegionFile> ref = cache.get(file);
 
         if (ref != null && ref.get() != null) {
             return ref.get();
@@ -104,16 +135,16 @@ public class RegionFileCache {
             clearOne();
         }
 
-        RegionFile reg = new RegionFile(file);
+        LinearRegionFile reg = new LinearRegionFile(file);
         cache.put(file, new SoftReference<>(reg));
         return reg;
     }
 
-    private static synchronized void clearOne() {
-        Map.Entry<File, Reference<RegionFile>> clearEntry = cache.entrySet().iterator().next();
+    private synchronized void clearOne() {
+        Map.Entry<File, Reference<LinearRegionFile>> clearEntry = cache.entrySet().iterator().next();
         cache.remove(clearEntry.getKey());
         try {
-            RegionFile removeFile = clearEntry.getValue().get();
+            LinearRegionFile removeFile = clearEntry.getValue().get();
             if (removeFile != null) {
                 removeFile.close();
             }
@@ -122,37 +153,9 @@ public class RegionFileCache {
         }
     }
 
-    public static int getSizeDelta(File basePath, int chunkX, int chunkZ) {
-        RegionFile r = getRegionFile(basePath, chunkX, chunkZ);
-        return r.getSizeDelta();
-    }
-
-    public static DataInputStream getChunkDataInputStream(File basePath, int chunkX, int chunkZ) {
-        RegionFile r = getRegionFile(basePath, chunkX, chunkZ);
-        if (r != null) {
-            return r.getChunkDataInputStream(chunkX, chunkZ);
-        } else {
-            return null;
-        }
-    }
-
-    public static DataOutputStream getChunkDataOutputStream(File basePath, int chunkX, int chunkZ) {
-        RegionFile r = getRegionFile(basePath, chunkX, chunkZ);
-        return r.getChunkDataOutputStream(chunkX, chunkZ);
-    }
-
-    public static CompletableFuture<byte[]> getChunkDeflatedDataAsync(File basePath, int chunkX, int chunkZ) {
-        RegionFile r = getRegionFileIfExists(basePath, chunkX, chunkZ);
-        if (r != null) {
-            return r.submitTask(regionFile -> regionFile.getDeflatedBytes(chunkX, chunkZ));
-        } else {
-            return CompletableFuture.completedFuture(null);
-        }
-    }
-
-    private static byte[] getChunkDeflatedData(File basePath, int chunkX, int chunkZ) {
+    public synchronized byte[] getChunkDeflatedData(File basePath, int chunkX, int chunkZ) {
         try {
-            RegionFile r = getRegionFileIfExists(basePath, chunkX, chunkZ);
+            LinearRegionFile r = getRegionFileIfExists(basePath, chunkX, chunkZ);
             if (r != null) {
                 return r.getDeflatedBytes(chunkX, chunkZ);
             } else {
@@ -164,21 +167,17 @@ public class RegionFileCache {
         }
     }
 
-    public static CompletableFuture<Void> putChunkDeflatedDataAsync(File basePath, int chunkX, int chunkZ, byte[] data) {
-        RegionFile r = getRegionFile(basePath, chunkX, chunkZ);
-        return r.submitTask(regionFile -> {
-            regionFile.putDeflatedBytes(chunkX, chunkZ, data);
-            return null;
-        });
-    }
-
-    private static void putChunkDeflatedData(File basePath, int chunkX, int chunkZ, byte[] data) {
+    public synchronized void putChunkDeflatedData(File basePath, int chunkX, int chunkZ, byte[] data) {
         try {
-            RegionFile r = getRegionFile(basePath, chunkX, chunkZ);
-            r.putDeflatedBytes(chunkX, chunkZ, data);
+            LinearRegionFile r = getRegionFile(basePath, chunkX, chunkZ);
+            r.putDeflatedBytes(chunkX & 31, chunkZ & 31, data);
         } catch (Throwable throwable) {
             System.err.println("Error when trying to write chunk " + chunkX + "," + chunkZ + " in " + basePath);
             throw throwable;
         }
+    }
+
+    public synchronized void shutdown() {
+        while(!cache.isEmpty()) clearOne();
     }
 }
