@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Xymb <xymb@endcrystal.me>
+Date: Tue, 30 Aug 2022 01:59:15 +0200
+Subject: [PATCH] Limit entity time per type to 10ms.
+
+
+diff --git a/src/main/java/net/minecraft/server/level/ServerLevel.java b/src/main/java/net/minecraft/server/level/ServerLevel.java
+index 4086784317bf045248fac477f7b1d247d69345bf..a701fcc1361f2b333a45bf832b1c38e74910fdbf 100644
+--- a/src/main/java/net/minecraft/server/level/ServerLevel.java
++++ b/src/main/java/net/minecraft/server/level/ServerLevel.java
+@@ -706,6 +706,7 @@ public class ServerLevel extends Level implements WorldGenLevel {
+         totalTicked = 0; // Xymb
+         Object2LongOpenHashMap<Object> entityTimings = new Object2LongOpenHashMap(); // Xymb
+         Object2IntOpenHashMap<Object> entityCounts = new Object2IntOpenHashMap(); // Xymb
++        final long TOTAL_TIME_PER_ENTITY_TYPE = 10000000L; // Xymb
+ 
+         if (flag || this.emptyTime++ < 300) {
+             gameprofilerfiller.push("entities");
+@@ -743,10 +744,12 @@ public class ServerLevel extends Level implements WorldGenLevel {
+                             gameprofilerfiller.push("tick");
+                             // Airplane start - copied from this.guardEntityTick
+                             try {
+-                                totalTicked++; // Xymb
+                                 long entityTickTime = System.nanoTime(); // Xymb
+ 
+-                                this.tickNonPassenger(entity); // Airplane - changed
++                                if (entityTimings.getOrDefault(entity.getClass(), 0) < TOTAL_TIME_PER_ENTITY_TYPE) { // Xymb
++                                    totalTicked++;
++                                    this.tickNonPassenger(entity); // Airplane - changed
++                                }
+ 
+                                 entityTickTime = System.nanoTime() - entityTickTime; // Xymb
+                                 entityTimings.addTo(entity.getClass(), entityTickTime); // Xymb
