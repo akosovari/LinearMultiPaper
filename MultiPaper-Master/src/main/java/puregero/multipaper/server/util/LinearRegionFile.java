@@ -21,7 +21,8 @@ public class LinearRegionFile {
     private boolean requiresSaving = false;
     private long lastUpdate = 0;
     private final long SAVE_FORCE_INTERVAL = 10 * 1000000000;
-    final byte COMPRESSION_LEVEL = 1;
+    final byte COMPRESSION_LEVEL = -1;
+    final boolean INTERNAL_LZ4_COMPRESSION = false;
 
     private boolean entities = false; // TODO: Remove
 
@@ -109,17 +110,20 @@ public class LinearRegionFile {
                         byte b[] = new byte[size];
                         dataStream.readFully(b, 0, size);
 
-                        int maxCompressedLength = compressor.maxCompressedLength(size);
-                        byte[] compressed = new byte[maxCompressedLength];
-                        int compressedLength = compressor.compress(b, 0, size, compressed, 0, maxCompressedLength);
-                        b = new byte[compressedLength];
-                        for(int j = 0 ; j < compressedLength ; j++)
-                            b[j] = compressed[j];
+                        if (INTERNAL_LZ4_COMPRESSION) {
+                            int maxCompressedLength = compressor.maxCompressedLength(size);
+                            byte[] compressed = new byte[maxCompressedLength];
+                            int compressedLength = compressor.compress(b, 0, size, compressed, 0, maxCompressedLength);
+                            b = new byte[compressedLength];
+                            for(int j = 0 ; j < compressedLength ; j++)
+                                b[j] = compressed[j];
+                        }
 
                         this.buffer[i] = b;
                         this.bufferUncompressedSize[i] = size;
                     }
                 }
+                System.out.println("Region load " + String.valueOf(System.nanoTime() - start));
             }
         } catch (IOException ex) {
             System.out.println("Region file corrupted! " + this.regionFile);
@@ -135,9 +139,13 @@ public class LinearRegionFile {
         if(this.bufferUncompressedSize[getChunkIndex(x, z)] != 0) {
             LZ4FastDecompressor decompressor = LZ4Factory.fastestInstance().fastDecompressor();
             try {
-                byte[] content = new byte[bufferUncompressedSize[getChunkIndex(x, z)]];
-                decompressor.decompress(this.buffer[getChunkIndex(x, z)], 0, content, 0, bufferUncompressedSize[getChunkIndex(x, z)]);
-                return toByteArray(new DeflaterInputStream(new ByteArrayInputStream(content), new Deflater(Deflater.BEST_SPEED)));
+                if (INTERNAL_LZ4_COMPRESSION) {
+                    byte[] content = new byte[bufferUncompressedSize[getChunkIndex(x, z)]];
+                    decompressor.decompress(this.buffer[getChunkIndex(x, z)], 0, content, 0, bufferUncompressedSize[getChunkIndex(x, z)]);
+                    return toByteArray(new DeflaterInputStream(new ByteArrayInputStream(content), new Deflater(Deflater.NO_COMPRESSION)));
+                } else {
+                    return toByteArray(new DeflaterInputStream(new ByteArrayInputStream(this.buffer[getChunkIndex(x, z)]), new Deflater(Deflater.NO_COMPRESSION)));
+                }
             } catch (IOException e) {
                 return null;
             }
@@ -163,12 +171,14 @@ public class LinearRegionFile {
             b = toByteArray(new InflaterInputStream(new ByteArrayInputStream(b)));
             int uncompressedSize = b.length;
 
-            int maxCompressedLength = compressor.maxCompressedLength(b.length);
-            byte[] compressed = new byte[maxCompressedLength];
-            int compressedLength = compressor.compress(b, 0, b.length, compressed, 0, maxCompressedLength);
-            b = new byte[compressedLength];
-            for(int j = 0 ; j < compressedLength ; j++)
-                b[j] = compressed[j];
+            if (INTERNAL_LZ4_COMPRESSION) {
+                int maxCompressedLength = compressor.maxCompressedLength(b.length);
+                byte[] compressed = new byte[maxCompressedLength];
+                int compressedLength = compressor.compress(b, 0, b.length, compressed, 0, maxCompressedLength);
+                b = new byte[compressedLength];
+                for(int j = 0 ; j < compressedLength ; j++)
+                    b[j] = compressed[j];
+            }
 
             this.buffer[getChunkIndex(x, z)] = b;
             this.bufferUncompressedSize[getChunkIndex(x, z)] = uncompressedSize;
@@ -220,7 +230,11 @@ public class LinearRegionFile {
                 chunkCount += 1;
                 long compStart = System.nanoTime();
                 byte[] content = new byte[bufferUncompressedSize[i]];
-                decompressor.decompress(buffer[i], 0, content, 0, bufferUncompressedSize[i]);
+                if (INTERNAL_LZ4_COMPRESSION) {
+                    decompressor.decompress(buffer[i], 0, content, 0, bufferUncompressedSize[i]);
+                } else {
+                    content = buffer[i];
+                }
 
                 region_total += buffer[i].length;
                 region_raw += content.length;
