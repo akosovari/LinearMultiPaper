@@ -19,7 +19,7 @@ dependencies {
     implementation(project(":MultiPaper-MasterMessagingProtocol"))
     implementation("org.jetbrains:annotations:22.0.0")
     implementation("org.json:json:20211205")
-    implementation("org.yaml:snakeyaml:1.30")
+    implementation("org.yaml:snakeyaml:1.32")
     implementation("io.netty:netty-all:4.1.75.Final")
     implementation("com.github.luben:zstd-jni:1.4.4-2")
     implementation("org.lz4:lz4-java:1.8.0")
